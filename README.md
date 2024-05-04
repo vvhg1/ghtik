@@ -35,6 +35,7 @@ Run the script with the following command:
 ghtik [FLAGS]
 ```
 ![](images/1.png)
+
 ![](images/2.png)
 
 ### Flags
