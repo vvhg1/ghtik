@@ -269,11 +269,7 @@ ghtik() {
             status_array[$counter]=$option_id"-"$option_name
             counter=$((counter + 1))
         else
-            if [ "$option_name" == "in progress" ] 
-            || [ "$option_name" == "In Progress" ]
-                || [ "$option_name" == "sprint backlog" ]
-                || [ "$option_name" == "Sprint Backlog" ]
-                ; then
+            if [ "$option_name" == "in progress" ] || [ "$option_name" == "In Progress" ] || [ "$option_name" == "sprint backlog" ] || [ "$option_name" == "Sprint Backlog" ] ; then
                 status_array[$counter]=$option_id"-"$option_name
                 counter=$((counter + 1))
             fi
