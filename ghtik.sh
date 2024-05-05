@@ -47,32 +47,44 @@ ghtik() {
     }
     show_all=false
     only_list=false
-    if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
-        show_help
-        return 0
-    elif [ "$1" = "-a" ] || [ "$1" = "--all" ]; then
-        show_all=true
-    elif [ "$1" = "-l" ] || [ "$1" = "--list" ]; then
-        only_list=true
-    elif [ "$1" = "-la" ] || [ "$1" = "-al" ]; then
-        show_all=true
-        only_list=true
-    elif [ "$1" = "-o" ] || [ "$1" = "--options" ]; then
-        all_options=true
-    elif [ "$1" = "-lo" ] || [ "$1" = "-ol" ]; then
-        only_list=true
-        all_options=true
-    elif [ "$1" = "-ao" ] || [ "$1" = "-oa" ]; then
-        show_all=true
-        all_options=true
-    elif [ "$1" = "-lao" ] || [ "$1" = "-loa" ] || [ "$1" = "-alo" ] || [ "$1" = "-aol" ] || [ "$1" = "-ola" ] || [ "$1" = "-oal" ]; then
-        show_all=true
-        only_list=true
-        all_options=true
-    elif [ -n "$1" ]; then
-        echo "Invalid flag $1"
-        return 1
-    fi
+    for arg in "$@"; do
+        case $arg in
+        -h | --help)
+            show_help
+            return 0
+            ;;
+        -a | --all)
+            show_all=true
+            ;;
+        -l | --list)
+            only_list=true
+            ;;
+        -o | --options)
+            all_options=true
+            ;;
+        -la | -al)
+            show_all=true
+            only_list=true
+            ;;
+        -lo | -ol)
+            only_list=true
+            all_options=true
+            ;;
+        -ao | -oa)
+            show_all=true
+            all_options=true
+            ;;
+        -lao | -loa | -alo | -aol | -ola | -oal)
+            show_all=true
+            only_list=true
+            all_options=true
+            ;;
+        *)
+            echo "Invalid flag $arg"
+            return 1
+            ;;
+        esac
+    done
 
     # get the repo owner
     gh_name=$(git remote get-url origin | sed -e 's/.*github.com\///' -e 's/\/.*//')
@@ -342,14 +354,27 @@ ghtik() {
         # check if branch exists
         if [ -z "$(git branch --list | grep " $branch_name"$)" ]; then
             if check_yes_no_internal "It's dangerous to go alone! Take a branch with you? [Y/n]: "; then
-                #make sure we are on main
-                if [ "$(git branch --show-current)" != "main" ]; then
-                    if check_yes_no_internal "You are not on main, switch to main and pull before creating branch? [Y/n]: "; then
-                        git checkout main
-                        git pull
-                    elif ! check_yes_no_internal "Continue without switching to main? [Y/n]: "; then
-                        echo "Aborting"
-                        return 0
+                #make sure we are on main or dev
+                #check if dev exists
+                if [ -z "$(git branch --list | grep " dev$")" ]; then
+                    if [ "$(git branch --show-current)" != "main" ]; then
+                        if check_yes_no_internal "You are not on main, switch to main and pull before creating branch? [Y/n]: "; then
+                            git checkout main
+                            git pull
+                        elif ! check_yes_no_internal "Continue without switching to main? [Y/n]: "; then
+                            echo "Aborting"
+                            return 0
+                        fi
+                    fi
+                else
+                    if [ "$(git branch --show-current)" != "dev" ]; then
+                        if check_yes_no_internal "You are not on dev, switch to dev and pull before creating branch? [Y/n]: "; then
+                            git checkout dev
+                            git pull
+                        elif ! check_yes_no_internal "Continue without switching to dev? [Y/n]: "; then
+                            echo "Aborting"
+                            return 0
+                        fi
                     fi
                 fi
                 git checkout -b $branch_name
