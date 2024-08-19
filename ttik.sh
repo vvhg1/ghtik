@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # This script is used to manage github tickets in a project
-ghtik() {
+ttik() {
     check_yes_no_internal() {
     while true; do
         sleep 0.1
@@ -23,11 +23,11 @@ ghtik() {
     done
 }
     show_help() {
-        echo "ghtik"
+        echo "ttik"
         echo "Checks and changes the status of tickets on github"
         echo "The tickets will be checked in the current directory's git repo"
         echo ""
-        echo "Usage: ghtik [flags]"
+        echo "Usage: ttik [flags]"
         echo ""
         echo "Flags"
         echo ""
@@ -86,156 +86,189 @@ ghtik() {
         esac
     done
 
-    # get the repo owner
-    gh_name=$(git remote get-url origin | sed -e 's/.*github.com\///' -e 's/\/.*//')
-    gh_name=${gh_name#*:}
-    # get the repo name from path
+    if [ $show_all = true ]; then
+        show_issues="all"
+    else
+        show_issues="open"
+    fi
+
+    # check if token is set
+    if [ -z "$TEA_TOKEN" ]; then
+        # let th user enter the token and set it
+        read -sp "Please enter your token: " my_token
+        echo
+    fi
+    # set the token
+    export TEA_TOKEN="$my_token"
+    
+    gh_name=$(git config user.name)
+    
+    touch "/tmp/$gh_name.tea_cookies.txt"
+    chmod 600 "/tmp/$gh_name.tea_cookies.txt"
+    
+    repo_url=$(git remote get-url origin)
+    repo_url=$(echo $repo_url | sed -E 's/(https:\/\/|git@)//g' | sed -E 's/(\/|:).*//')
+
+    repo_owner=$(git remote get-url origin | sed -E 's/(https:\/\/|git@)([a-zA-Z0-9\-\.]*)(:|\/)//g' | sed 's/\/.*//')
+    
     repo_name=$(basename $(git rev-parse --show-toplevel))
 
-    repo_id="$(gh api graphql -f ownerrepo="$gh_name" -f reponame="$repo_name" -f query='
-    query($ownerrepo: String!, $reponame: String!) {
-        repository(owner: $ownerrepo, name: $reponame) {
-            id
-            projectsV2(first: 1, orderBy: {field: CREATED_AT, direction: DESC}) {
-                nodes {
-                    id
-                    number
-                }
-            }
-        }
-    }')"
-    repo_id=${repo_id#*\"id\":\"}
-    project_id=${repo_id#*\"id\":\"}
-    repo_id=${repo_id%%\"*}
-    project_id=${project_id%%\"*}
+    get_login_page=$(curl -s -i -k 'GET' \
+    'https://'"$repo_url"'/user/login' \
+    -c "/tmp/$gh_name.tea_cookies.txt" \
+    -b "/tmp/$gh_name.tea_cookies.txt" \
+    -H 'accept: text/html,application/xhtml+xml,application/xml')
+    
+    # this gets the repo and it's projects
+    get_project_request=$(curl -s -i -k 'GET' \
+        'https://'"$repo_url"'/'"$repo_owner"'/'"$repo_name"'/projects' \
+        -b "/tmp/$gh_name.tea_cookies.txt" \
+        -c "/tmp/$gh_name.tea_cookies.txt" \
+        -H 'accept: text/html,application/xhtml+xml,application/xml' 
+    )
+    
+    # get response code
+    response_code=$(echo "$get_project_request" | grep -oP "HTTP\/[0-9\.]+ \K[0-9]{3}" | head -n 1)
+    if [ "$response_code" == "404" ]; then # if we get a 404 then we need to login
+        echo "You need to login to Gitea"
+        # ask for password
+        read -sp "Please enter your gitea password:" gtpw
+        # new line
+        echo
+          login_response=$(curl -s -i -L 'https://'"$repo_url"'/user/login' \
+          -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7' \
+          -H 'Content-Type: application/json' \
+          -b "/tmp/$gh_name.tea_cookies.txt" \
+          -c "/tmp/$gh_name.tea_cookies.txt" \
+          -d '{
+              "UserName": "'"$gh_name"'",
+              "Password": "'"$gtpw"'"
+          }' \
+          --compressed \
+          --insecure)
+        response_code=$(echo "$login_response" | grep -oP "HTTP\/[0-9\.]+ \K[0-9]{3}" | head -n 1)
+        echo "Login response code $response_code"
+        if [ "$response_code" != "303" ]; then
+            echo "Login failed"
+            echo "$login_response"
+            return 1
+        fi
+        if [ $(echo "$login_response" | wc -l) -lt 350 ]; then
+            echo "Login failed, page too short"
+            echo "$login_response"
+            return 1
+        fi
+        
+        get_project_request=$(curl -s -i -k 'GET' \
+            'https://'"$repo_url"'/'"$repo_owner"'/'"$repo_name"'/projects' \
+            -H 'accept: text/html,application/xhtml+xml,application/xml' \
+            -b "/tmp/$gh_name.tea_cookies.txt" \
+            -c "/tmp/$gh_name.tea_cookies.txt" \
+        )
+        
 
-    issues="$(gh api graphql -f project="$project_id" -f field="$status_field_id" -f query='
-    query($project: ID!) {
-        node(id: $project) {
-            ... on ProjectV2 {
-                items(last: 100 ) {
-                    nodes {
-                        fieldValues(first: 100) {
-                            nodes {
-                                ... on ProjectV2ItemFieldSingleSelectValue {
-                                    name
-                                }
-                            }
-                        }
-                        id
-                        content {
-                            ... on Issue {
-                                id
-                                title
-                                number
-                                createdAt
-                                state
-                                body
-                                assignees(first: 3) {
-                                    nodes {
-                                    ...on User {
-                                        login
-                                    }
-                                }
-                                }
-                                labels(first: 10) {
-                                    nodes {
-                                        name
-                                    }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }')"
-    declare -a issues_arr
-    while [[ $issues == *"\"id\":\""* ]]; do
-        status_column=${issues#*'{}','{'\"name\":\"}
-        status_column=${status_column%%\"*}
+    fi
+    project_id=$(echo $get_project_request | grep -oP 'href=".*projects\/\K\d+' | head -n 1)
 
-        item_id=${issues#*\"id\":\"}
-        item_id=${item_id%%\"*}
-        issues=${issues#*\"id\":\"$item_id\"}
+    # TODO: rename
+    remaining_string=$(echo $get_page_request | sed  's/project-column-issue-count\"> [0-9]\+ <\/div> /project-column-issue-count\"><\/div> /')
 
-        issue_id=${issues#*\"id\":\"}
-        issue_id=${issue_id%%\"*}
-        issues=${issues#*\"id\":\"$issue_id\"}
+    declare -A columns
 
-        issue_name=${issues#*\"title\":\"}
-        issue_name=${issue_name%%\"*}
+    # iterate until remaining_string is empty
+    while [ -n "$remaining_string" ]; do
+        old_string=$remaining_string
+        remaining_string=${remaining_string#*ui segment project-column}
 
-        issue_num=${issues#*\"number\":}
-        issue_num=${issue_num%%,*}
+        if [ "$old_string" == "$remaining_string" ]; then
+            break
+        fi
 
-        issue_state=${issues#*\"state\":\"}
-        issue_state=${issue_state%%\"*}
+        variable2=${remaining_string#*data-id=\"}
+        # echo "variable2 $variable2"
+        column_id=$(echo $variable2 | sed -n 's/^\([0-9]\{1,2\}\).*/\1/p')
+        remaining_string=${remaining_string#*div> } 
+        column_name=$(echo $remaining_string | sed 's/ <\/div>.*//')
 
-        issue_assignees=${issues#*\"assignees\":{\"nodes\":[}
-        issue_assignees=${issue_assignees%%]*}
-        assignees=""
-        while [[ $issue_assignees == *"\"login\":\""* ]]; do
-            assignee=${issue_assignees#*\"login\":\"}
-            assignee=${assignee%%\"*}
-            issue_assignees=${issue_assignees#*\"login\":\"$assignee\"}
-            if [ -z "$assignees" ]; then
-                assignees="$assignee"
-            else
-                assignees="$assignees $assignee"
-            fi
-        done
-        issue_created=${issues#*\"createdAt\":\"}
-        issue_created=${issue_created%%\"*}
-
-        issue_labels=${issues#*\"labels\":{\"nodes\":[}
-        issue_labels=${issue_labels%%]*}
-        labels=""
-        while [[ $issue_labels == *"\"name\":\""* ]]; do
-            label=${issue_labels#*\"name\":\"}
-            label=${label%%\"*}
-            issue_labels=${issue_labels#*\"name\":\"$label\"}
-            if [ -z "$labels" ]; then
-                labels="$label"
-            else
-                labels="$labels $label"
-            fi
-        done
-        issue_body=${issues#*\"body\":\"}
-        issue_body=${issue_body%%\"*}
-        issues_arr[$issue_num]="$issue_num"";""$issue_name"";""$status_column"";""$labels"";""$issue_state"";""$assignees"";""$issue_created"";""$issue_id"";""$item_id"";""$issue_body"
-
+        columns[$column_name]=$column_id
     done
+    
+    issues=$(curl -s -k 'GET' \
+      'https://'"$repo_url"'/api/v1/repos/'"$repo_owner"'/'"$repo_name"'/issues?state='"$show_issues"'' \
+      -H 'accept: application/json' \
+      -H 'Authorization: token '"$my_token" \
+      -H 'Content-Type: application/json')
+    
+    # now we need to get the issues from the project page to get the columns
+    get_project_page=$(curl -s -i -k 'GET' \
+        'https://'"$repo_url"'/'"$repo_owner"'/'"$repo_name"'/projects/'"$project_id"'' \
+        -H 'Accept: text/html,application/xhtml+xml,application/xml' \
+        -b "/tmp/$gh_name.tea_cookies.txt" \
+        -c "/tmp/$gh_name.tea_cookies.txt" \
+        )
+
+    colunns_headers=$(echo $get_project_page | grep -n -oP "project-column-issue-count\">" | cut -d ":" -f 1 | tac)
+    # we build a json array of issues
+    issues_to_columns="[]"
+    while IFS= read -r colunn_header; do
+            colunn_name=$(echo $get_project_page | tail -n +"$((colunn_header + 3))" | head -n 1 | sed 's/^[[:space:]]*//g')
+            # now we get the issues
+            issues_section=$(echo $get_project_page | tail -n +"$((colunn_header + 3))")
+            # the project page has the issues listed in the following format
+            issues_numbers=$(echo $issues_section | grep -oP 'href="/'"$repo_owner"'/'"$repo_name"'/issues/\K\d+')
+            if [ -z "$issues_numbers" ]; then
+                continue
+            fi
+            # now we add the issues to the array
+            while IFS= read -r issue; do
+                # add the issue to the issues_to_columns array
+                issue_to_add="{\"number\":$issue,\"issueState\":\"$colunn_name\"}"
+                issues_to_columns=$(echo $issues_to_columns | jq  ". += [$issue_to_add]")
+            done <<< "$issues_numbers"
+            # cut that section out of the page
+            get_project_page=$(echo $get_project_page | head -n $((colunn_header + 3)))
+    done <<< "$colunns_headers"
+    
+
+    # Combine issues and issues_to_columns
+    combined_issues=$(jq -n --argjson issues "$issues" --argjson issues_to_columns "$issues_to_columns" ' [$issues[] as $i | $issues_to_columns[] | select(.number == $i.number) | $i + {issueState: .issueState}] ')
+    
     # if only listing, print and exit
     if [ "$only_list" = true ]; then
         if [ "$show_all" = true ]; then
-            printf '%s\n' "${issues_arr[@]}" | cut -d ";" -f 1,2,3,4,5,6,7 | sort -t ';' -k 3 -r | column -s$';' -t
+            # we now use the combined issues array
+            echo "$combined_issues" | jq -r '.[] | {number, title, issueState, labels[].name, state, assignees, createdAt}' | sed 's/null/-/g' | sort -t ';' -k 3 -r | column -s$';' -t
         else
-            printf '%s\n' "${issues_arr[@]}" | cut -d ";" -f 1,2,3,4,5,6,7 | sort -t ';' -k 3 -r | awk -F ';' '$3 != "Done" && $3 != "done"' | column -s$';' -t
+            echo "$combined_issues" | jq -r '.[] | {number, title, issueState, labels[].name, state, assignees, createdAt}' | sed 's/null/-/g' | sort -t ';' -k 3 -r | awk -F ';' '$3 != "Done" && $3 != "done"' | column -s$';' -t
         fi
         return 0
     fi
     # print the issues
     if [ "$show_all" = true ]; then
         # show the 5th column (status)
-        issuei="$(printf '%s\n' "${issues_arr[@]}" | cut -d ";" -f 1,2,3,4,5,6,7 | sort -t ';' -k 3 -r | column -s$';' -t | fzf)"
+        issuei="$(echo "$combined_issues" | jq -r '.[] | "\(.number);\(.title);\(.issueState);\(.labels[].name);\(.state);\(.assignees);\(.created_at)"' | sed 's/null/-/g' | sort -t ';' -k 3 -r | column -s$';' -t | fzf)"
     else
-        issuei="$(printf '%s\n' "${issues_arr[@]}" | cut -d ";" -f 1,2,3,4,5,6,7 | sort -t ';' -k 3 -r | awk -F ';' '$3 != "Done" && $3 != "done"' | column -s$';' -t | fzf)"
+        issuei="$(echo "$combined_issues" | jq -r '.[] | "\(.number);\(.title);\(.issueState);\(.labels[].name);\(.state);\(.assignees);\(.created_at)"' | sed 's/null/-/g' | sort -t ';' -k 3 -r | awk -F ';' '$3 != "Done" && $3 != "done"' | column -s$';' -t | fzf)"
     fi
     if [ -z "$issuei" ]; then
         echo "No issue selected"
         return 0
     fi
     issue_num=${issuei%% *}
-    # printf '%s\n' "${issues_arr[$issue_num]}"
-    issue_without_body="$(printf '%s\n' "${issues_arr[$issue_num]}" | cut -d ";" -f 1,2,3,4,5,6,7 | column -s$';' -t)"
-    item_id=$(printf '%s\n' "${issues_arr[$issue_num]}" | cut -d ";" -f 9)
-    # make sure id starts with PV
-    if [[ $item_id != PV* ]]; then
-        item_id=$(printf '%s\n' "${issues_arr[$issue_num]}" | cut -d ";" -f 8)
-    fi
+    # echo "issue_num $issue_num"
+    # we grab the issue from the combined issues json, we know it's number is $issue_num and it is at the beginning of the line
+    full_issue=$(echo "$combined_issues" | jq -r '.[] | "\(.number);\(.title);\(.issueState);\(.labels[].name);\(.state);\(.assignees);\(.created_at);\(.repository.full_name);\(.url);\(.body)"' | sed 's/null/-/g' | grep -w "^$issue_num")
+    # | column -s$';' -t)
+    issue_body=$(echo "$full_issue" | awk -F ';' '{print $10}')
+    indent="    "  # 4 spaces
+    indented_body=$(echo "$issue_body" | fold -s -w 80 | sed "s/^/$indent/")
+    echo "$indented_body"
+
+    # print the issue nicely, first line is the issue title, repo name and number
+    echo "$full_issue" | awk -v indented_body="$indented_body" -F ';' '{printf "\033[1m%s\033[0m %s#%s\n%s - %s\n\nAssignees:%s\n\n%s\n\n%s\n", $2, $8, $1, $5, $3, $6,indented_body, $9}'
+    # echo "$full_issue"
+    return 0
     # print the issue
-    gh issue view "$issue_num"
     # get the state
     issue_state=$(printf '%s\n' "${issues_arr[$issue_num]}" | cut -d ";" -f 5)
     issue_name="$(printf '%s\n' "${issues_arr[$issue_num]}" | cut -d ";" -f 2)"
