@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # This script is used to manage github tickets in a project
-ghtik() {
+ticketforgithub() {
     check_yes_no_internal() {
     while true; do
         sleep 0.1
@@ -23,7 +23,7 @@ ghtik() {
     done
 }
     show_help() {
-        echo "ghtik"
+        echo "ticketforgithub"
         echo "Checks and changes the status of tickets on github"
         echo "The tickets will be checked in the current directory's git repo"
         echo ""
